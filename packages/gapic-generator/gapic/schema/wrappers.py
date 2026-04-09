@@ -685,10 +685,36 @@ class MessageType:
         If there are multiple paths, returns the first one."""
         return next(iter(self.options.Extensions[resource_pb2.resource].pattern), None)
 
+    def _apply_domain_heuristic(self, raw_type: str) -> str:
+        """Determines if a resource is foreign and adds a prefix to prevent
+        [no-redef] AST collisions."""
+        if not raw_type:
+            return ""
+        
+        if "/" not in raw_type:
+            return raw_type
+
+        # Extract the root domain and final resource name, bypassing any nested paths.
+        # (e.g., "ces.googleapis.com/Project/Location/Tool" -> "ces.googleapis.com" and "Tool")
+        resource_parts = raw_type.split('/')
+        domain, short_name = resource_parts[0], resource_parts[-1]
+        domain_prefix = domain.split('.', 1)[0]
+
+        try:
+            native_package = self.meta.address.package
+            # 2. If the domain prefix isn't natively in the package namespace, it's foreign
+            if domain_prefix and native_package and domain_prefix not in native_package:
+                return f"{domain_prefix}_{short_name}"
+        except (AttributeError, TypeError):
+            # 3. Safe fallback if meta, address, or package are missing/None on this wrapper
+            pass
+
+        return short_name
+    
     @property
     def resource_type(self) -> Optional[str]:
         resource = self.options.Extensions[resource_pb2.resource]
-        return resource.type[resource.type.find("/") + 1 :] if resource else None
+        return self._apply_domain_heuristic(resource.type) if resource else None
 
     @property
     def resource_type_full_path(self) -> Optional[str]:

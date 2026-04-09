@@ -188,7 +188,7 @@ def test_resource_path():
     resource.pattern.append("kingdoms/{kingdom}/phyla/{phylum}/classes/{klass}")
     resource.pattern.append("kingdoms/{kingdom}/divisions/{division}/classes/{klass}")
     resource.type = "taxonomy.biology.com/Class"
-    message = make_message("Squid", options=options)
+    message = make_message("Squid", options=options, package="taxonomy.biology.v1")
 
     assert message.resource_path == "kingdoms/{kingdom}/phyla/{phylum}/classes/{klass}"
     assert message.resource_path_args == ["kingdom", "phylum", "klass"]
@@ -201,7 +201,7 @@ def test_resource_path_with_wildcard():
     resource.pattern.append("kingdoms/{kingdom}/phyla/{phylum}/classes/{klass=**}")
     resource.pattern.append("kingdoms/{kingdom}/divisions/{division}/classes/{klass}")
     resource.type = "taxonomy.biology.com/Class"
-    message = make_message("Squid", options=options)
+    message = make_message("Squid", options=options, package="taxonomy.biology.v1")
 
     assert (
         message.resource_path == "kingdoms/{kingdom}/phyla/{phylum}/classes/{klass=**}"
@@ -230,7 +230,7 @@ def test_resource_path_pure_wildcard():
     resource = options.Extensions[resource_pb2.resource]
     resource.pattern.append("*")
     resource.type = "taxonomy.biology.com/Class"
-    message = make_message("Squid", options=options)
+    message = make_message("Squid", options=options, package="taxonomy.biology.v1")
 
     # Pure wildcard resource names do not really help construct resources
     # but they are a part of the spec so we need to support them, which means at
@@ -473,3 +473,60 @@ def test_extended_operation_request_response_fields():
 
     actual = poll_request.extended_operation_response_fields
     assert actual == expected
+
+
+@pytest.mark.parametrize(
+    "raw_type, package_tuple, expected",
+    [
+        # 1. Empty or malformed inputs
+        ("", ("google", "cloud", "dialogflow", "v2"), ""),
+        ("Tool", ("google", "cloud", "dialogflow", "v2"), "Tool"),
+
+        # 2. Native Resources (Prefix 'dialogflow' IS in the package tuple)
+        ("dialogflow.googleapis.com/Tool", ("google", "cloud", "dialogflow", "v2"), "Tool"),
+        ("dialogflow.googleapis.com/Project/Location/Tool", ("google", "cloud", "dialogflow", "v2"), "Tool"),
+
+        # 3. Foreign Resources (Prefix 'ces' is NOT in the package tuple)
+        ("ces.googleapis.com/Tool", ("google", "cloud", "dialogflow", "v2"), "ces_Tool"),
+        ("ces.googleapis.com/Project/Location/Tool", ("google", "cloud", "dialogflow", "v2"), "ces_Tool"),
+    ]
+)
+def test_apply_domain_heuristic(raw_type, package_tuple, expected):
+    meta = metadata.Metadata(
+        address=metadata.Address(
+            name="TestMessage",
+            package=package_tuple,
+            module="test",
+        )
+    )
+    message = make_message("TestMessage", meta=meta)
+
+    actual = message._apply_domain_heuristic(raw_type)
+    assert actual == expected
+
+
+def test_apply_domain_heuristic_none_package():
+    """Test the EAFP failsafe if package is explicitly None (TypeError)."""
+    meta = metadata.Metadata(
+        address=metadata.Address(
+            name="TestMessage",
+            package=None,
+            module="test",
+        )
+    )
+    message = make_message("TestMessage", meta=meta)
+
+    actual = message._apply_domain_heuristic("ces.googleapis.com/Tool")
+    assert actual == "Tool"
+
+
+def test_apply_domain_heuristic_missing_meta():
+    """Test the EAFP failsafe if meta or address are missing (AttributeError)."""
+    # To test the AttributeError fallback cleanly without mocks, we can just 
+    # pass a bare-bones Python class to the unbound method. This perfectly 
+    # proves the try/except block safely handles totally missing attributes.
+    class EmptyMessage:
+        pass
+        
+    actual = wrappers.MessageType._apply_domain_heuristic(EmptyMessage(), "ces.googleapis.com/Tool")
+    assert actual == "Tool"
